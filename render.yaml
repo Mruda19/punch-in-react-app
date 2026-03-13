@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: punch-in-react-app
+    env: node
+    buildCommand: npm run build
+    startCommand: npm start
