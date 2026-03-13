@@ -1,63 +1,71 @@
-const express = require("express")
-const bodyParser = require("body-parser")
-const path = require("path")
-const db = require("./couchbase")
+const express = require("express");
+const path = require("path");
+const fs = require("fs");
 
-const app = express()
+const app = express();
+app.use(express.json());
 
-app.use(bodyParser.json())
+// Serve React build
+app.use(express.static(path.join(__dirname, "client/build")));
 
-/* SAVE PUNCH */
+const DATA_FILE = path.join(__dirname, "entries.json");
 
-app.post("/punch", async (req,res)=>{
+// Load entries from file
+function loadEntries() {
+  if (!fs.existsSync(DATA_FILE)) return [];
+  try {
+    return JSON.parse(fs.readFileSync(DATA_FILE, "utf8"));
+  } catch {
+    return [];
+  }
+}
 
-const {type,time,project,notes} = req.body
+// Save entries to file
+function saveEntries(entries) {
+  fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2));
+}
 
-const collection = await db.collection()
+// GET all entries
+app.get("/api/entries", (req, res) => {
+  const entries = loadEntries();
+  res.json(entries);
+});
 
-const id = Date.now().toString()
+// POST a new punch action
+app.post("/api/punch", (req, res) => {
+  const { type, project, notes, manualDate, manualTime } = req.body;
 
-await collection.insert(id,{
-type,
-time,
-project,
-notes
-})
+  if (!type) {
+    return res.status(400).json({ message: "Action type is required." });
+  }
 
-res.send({message:"saved"})
+  let timestamp;
+  if (manualDate && manualTime) {
+    timestamp = new Date(`${manualDate}T${manualTime}`).toISOString();
+  } else {
+    timestamp = new Date().toISOString();
+  }
 
-})
+  const entry = {
+    type,
+    time: timestamp,
+    project: project || null,
+    notes: notes || null,
+  };
 
+  const entries = loadEntries();
+  entries.push(entry);
+  saveEntries(entries);
 
-/* GET HISTORY */
+  res.json({ message: `${type} recorded successfully.`, entry });
+});
 
-app.get("/history", async(req,res)=>{
+// Fallback to React app
+app.get("*", (req, res) => {
+  res.sendFile(path.join(__dirname, "client/build/index.html"));
+});
 
-const cluster = await db.cluster()
-
-const query = `
-SELECT META().id,type,time,project,notes
-FROM \`${process.env.COUCHBASE_BUCKET}\`
-ORDER BY META().id DESC
-`
-
-const result = await cluster.query(query)
-
-res.send(result.rows)
-
-})
-
-
-/* SERVE REACT BUILD */
-
-app.use(express.static(path.join(__dirname,"client/build")))
-
-app.get("*",(req,res)=>{
-res.sendFile(path.join(__dirname,"client/build/index.html"))
-})
-
-const port = process.env.PORT || 3000
-
-app.listen(port,()=>{
-console.log("server started")
-})
+const PORT = process.env.PORT || 3001;
+app.listen(PORT, () => {
+  console.log(`server started on port ${PORT}`);
+});
