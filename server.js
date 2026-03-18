@@ -3,7 +3,9 @@ const path    = require("path");
 const fs      = require("fs");
 
 const app = express();
-app.use(express.json());
+
+// Selfie images are base64 (~50-100KB each), increase limit
+app.use(express.json({ limit: "5mb" }));
 app.use(express.static(path.join(__dirname, "client/build")));
 
 const DATA_FILE = path.join(__dirname, "entries.json");
@@ -23,7 +25,7 @@ app.get("/api/entries", (req, res) => {
 });
 
 app.post("/api/punch", (req, res) => {
-  const { type, user, manualDate, manualTime } = req.body;
+  const { type, user, manualDate, manualTime, selfie } = req.body;
   if (!type) return res.status(400).json({ message: "Action type is required." });
   if (!user) return res.status(400).json({ message: "User is required." });
 
@@ -31,7 +33,13 @@ app.post("/api/punch", (req, res) => {
     ? new Date(`${manualDate}T${manualTime}`).toISOString()
     : new Date().toISOString();
 
-  const entry = { type, user: user.trim(), time: timestamp };
+  const entry = {
+    type,
+    user: user.trim(),
+    time: timestamp,
+    selfie: selfie || null,
+  };
+
   const entries = loadEntries();
   entries.push(entry);
   saveEntries(entries);
@@ -39,7 +47,7 @@ app.post("/api/punch", (req, res) => {
   res.json({ message: `${type} recorded successfully for ${user}.`, entry });
 });
 
-// Clear all entries (useful for resetting test data)
+// Clear all entries
 app.delete("/api/entries", (req, res) => {
   saveEntries([]);
   res.json({ message: "All entries cleared." });
