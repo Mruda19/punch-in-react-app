@@ -1,7 +1,15 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import "./App.css";
 
-const API_BASE = "";
+// ─────────────────────────────────────────────────────────────────
+// CONFIG — replace the EC2 URL once your backend is running
+// ─────────────────────────────────────────────────────────────────
+const API_BASE    = "";                              // Render backend (existing)
+// EC2_API → Bastion Host PUBLIC IP (from AWS EC2 console)
+// React runs on Render (public internet) so it CANNOT reach
+// the private EC2 IP (10.0.x.x) directly.
+// Use your Bastion's public IP here, then redeploy to Render.
+const EC2_API = "http://<13.201.45.178>:5000"; // 👈 only change this one line
 
 const USERS = [
   "Ajit Jadhav",
@@ -18,19 +26,21 @@ const PUNCH_ACTIONS = [
   { label: "End Break",   type: "End Break",   icon: "↩", cls: "action-break-end" },
 ];
 
-/* ── Camera Modal ───────────────────────────────────────────── */
+// ─────────────────────────────────────────────────────────────────
+// CAMERA MODAL
+// ─────────────────────────────────────────────────────────────────
 function CameraModal({ user, actionType, onCapture, onCancel }) {
-  const videoRef   = useRef(null);
-  const canvasRef  = useRef(null);
-  const streamRef  = useRef(null);
-  const [ready,    setReady]    = useState(false);
-  const [captured, setCaptured] = useState(null);
-  const [camErr,   setCamErr]   = useState("");
+  const videoRef    = useRef(null);
+  const canvasRef   = useRef(null);
+  const streamRef   = useRef(null);
+  const [ready,     setReady]     = useState(false);
+  const [captured,  setCaptured]  = useState(null);
+  const [camErr,    setCamErr]    = useState("");
   const [countdown, setCountdown] = useState(null);
 
-  // Start camera
   useEffect(() => {
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: "user" }, audio: false })
       .then(stream => {
         streamRef.current = stream;
         if (videoRef.current) {
@@ -39,8 +49,9 @@ function CameraModal({ user, actionType, onCapture, onCancel }) {
           setReady(true);
         }
       })
-      .catch(() => setCamErr("Camera access denied. Please allow camera permission and try again."));
-
+      .catch(() =>
+        setCamErr("Camera access denied. Please allow camera permission and try again.")
+      );
     return () => {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     };
@@ -71,18 +82,22 @@ function CameraModal({ user, actionType, onCapture, onCancel }) {
 
   const retake = () => {
     setCaptured(null);
-    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" }, audio: false })
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: "user" }, audio: false })
       .then(stream => {
         streamRef.current = stream;
-        if (videoRef.current) { videoRef.current.srcObject = stream; videoRef.current.play(); setReady(true); }
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play();
+          setReady(true);
+        }
       });
   };
 
-  const confirm = () => onCapture(captured);
-
-  const actionColor = actionType === "Punch In"  ? "#16a34a"
-                    : actionType === "Punch Out" ? "#dc2626"
-                    : actionType === "Start Break"? "#d97706" : "#2563eb";
+  const actionColor =
+    actionType === "Punch In"    ? "#16a34a" :
+    actionType === "Punch Out"   ? "#dc2626" :
+    actionType === "Start Break" ? "#d97706" : "#2563eb";
 
   return (
     <div className="modal-overlay">
@@ -107,7 +122,9 @@ function CameraModal({ user, actionType, onCapture, onCancel }) {
           ) : (
             <>
               <p className="cam-instruction">
-                {captured ? "Does this look good?" : "Position your face in the frame, then click Capture."}
+                {captured
+                  ? "Does this look good?"
+                  : "Position your face in the frame, then click Capture."}
               </p>
 
               <div className="cam-frame">
@@ -129,7 +146,9 @@ function CameraModal({ user, actionType, onCapture, onCancel }) {
               <div className="modal-actions">
                 {!captured ? (
                   <>
-                    <button className="btn-secondary" onClick={onCancel}>Cancel</button>
+                    <button className="btn-secondary" onClick={onCancel}>
+                      Cancel
+                    </button>
                     <button
                       className="btn-capture"
                       style={{ background: actionColor }}
@@ -141,11 +160,13 @@ function CameraModal({ user, actionType, onCapture, onCancel }) {
                   </>
                 ) : (
                   <>
-                    <button className="btn-secondary" onClick={retake}>↩ Retake</button>
+                    <button className="btn-secondary" onClick={retake}>
+                      ↩ Retake
+                    </button>
                     <button
                       className="btn-capture"
                       style={{ background: actionColor }}
-                      onClick={confirm}
+                      onClick={() => onCapture(captured)}
                     >
                       ✓ Confirm &amp; Submit
                     </button>
@@ -160,7 +181,9 @@ function CameraModal({ user, actionType, onCapture, onCancel }) {
   );
 }
 
-/* ── Selfie Thumbnail popup ─────────────────────────────────── */
+// ─────────────────────────────────────────────────────────────────
+// SELFIE ZOOM POPUP
+// ─────────────────────────────────────────────────────────────────
 function SelfiePop({ src, onClose }) {
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -172,7 +195,33 @@ function SelfiePop({ src, onClose }) {
   );
 }
 
-/* ── Main App ───────────────────────────────────────────────── */
+// ─────────────────────────────────────────────────────────────────
+// UPLOAD STATUS MODAL — shows while uploading selfie to S3
+// ─────────────────────────────────────────────────────────────────
+function UploadingModal({ stage }) {
+  const stages = {
+    uploading: { icon: "☁️", text: "Uploading selfie to S3…",     color: "#2563eb" },
+    saving:    { icon: "💾", text: "Saving punch record…",         color: "#d97706" },
+    done:      { icon: "✅", text: "Punch recorded successfully!", color: "#16a34a" },
+    error:     { icon: "❌", text: "Upload failed. Please retry.", color: "#dc2626" },
+  };
+  const s = stages[stage] || stages.uploading;
+  return (
+    <div className="modal-overlay">
+      <div className="upload-modal">
+        <div className="upload-icon">{s.icon}</div>
+        <p className="upload-text" style={{ color: s.color }}>{s.text}</p>
+        {(stage === "uploading" || stage === "saving") && (
+          <div className="upload-spinner" />
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────
+// MAIN APP
+// ─────────────────────────────────────────────────────────────────
 export default function App() {
   const [entries,      setEntries]      = useState([]);
   const [selectedUser, setSelectedUser] = useState("");
@@ -185,24 +234,30 @@ export default function App() {
   const [filterUser,   setFilterUser]   = useState("All Users");
   const [filterType,   setFilterType]   = useState("All Types");
 
-  // Camera state
-  const [cameraAction, setCameraAction] = useState(null); // { type } when open
-  const [zoomSelfie,   setZoomSelfie]   = useState(null);
+  // Camera & upload state
+  const [cameraAction,   setCameraAction]   = useState(null);
+  const [zoomSelfie,     setZoomSelfie]     = useState(null);
+  const [uploadStage,    setUploadStage]    = useState(null); // null | uploading | saving | done | error
 
+  // ── Fetch entries ──────────────────────────────────────────────
   const fetchEntries = async () => {
     try {
       const res  = await fetch(`${API_BASE}/api/entries`);
       const data = await res.json();
       setEntries(Array.isArray(data) ? data : []);
-    } catch { console.error("Failed to fetch entries"); }
+    } catch {
+      console.error("Failed to fetch entries");
+    }
   };
 
   useEffect(() => { fetchEntries(); }, []);
 
-  /* ── Stats ── */
+  // ── Stats ──────────────────────────────────────────────────────
   const todayPunches = entries.filter(e =>
-    e.type === "Punch In" && new Date(e.time).toDateString() === new Date().toDateString()
+    e.type === "Punch In" &&
+    new Date(e.time).toDateString() === new Date().toDateString()
   ).length;
+
   const breaksTaken = entries.filter(e => e.type === "Start Break").length;
 
   const statCards = [
@@ -212,27 +267,23 @@ export default function App() {
     { label: "Total Users",     value: USERS.length,   icon: "👥", color: "sc-teal"   },
   ];
 
-  /* ── Work hours per user per day (for history rows) ── */
+  // ── Work hours map (per user per day) ─────────────────────────
   const workHoursMap = (() => {
-    // key: "user__date" → { punchIn, punchOut, hours }
-    const map = {};
-    const sorted = [...entries].sort((a,b) => new Date(a.time) - new Date(b.time));
+    const map    = {};
+    const sorted = [...entries].sort((a, b) => new Date(a.time) - new Date(b.time));
     sorted.forEach(e => {
       const day = new Date(e.time).toLocaleDateString();
       const key = `${e.user}__${day}`;
       if (!map[key]) map[key] = { punchIn: null, punchOut: null };
-      if (e.type === "Punch In"  && !map[key].punchIn)  map[key].punchIn  = e.time;
-      if (e.type === "Punch Out")                        map[key].punchOut = e.time;
+      if (e.type === "Punch In"  && !map[key].punchIn) map[key].punchIn  = e.time;
+      if (e.type === "Punch Out")                       map[key].punchOut = e.time;
     });
-    // calc hours
     const result = {};
     Object.entries(map).forEach(([key, v]) => {
-      if (v.punchIn && v.punchOut) {
-        const hrs = ((new Date(v.punchOut) - new Date(v.punchIn)) / 3600000).toFixed(2);
-        result[key] = { punchIn: v.punchIn, punchOut: v.punchOut, hours: hrs + " h" };
-      } else {
-        result[key] = { punchIn: v.punchIn, punchOut: v.punchOut, hours: v.punchIn ? "Active…" : "-" };
-      }
+      const hrs = v.punchIn && v.punchOut
+        ? ((new Date(v.punchOut) - new Date(v.punchIn)) / 3600000).toFixed(2) + " h"
+        : v.punchIn ? "Active…" : "-";
+      result[key] = { punchIn: v.punchIn, punchOut: v.punchOut, hours: hrs };
     });
     return result;
   })();
@@ -243,71 +294,153 @@ export default function App() {
     return workHoursMap[key] || { punchIn: null, punchOut: null, hours: "-" };
   };
 
-  /* ── Punch handler — requires camera for Punch In / Punch Out ── */
+  const fmt = (iso) =>
+    iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : null;
+
+  // ── Step 1: Button click ───────────────────────────────────────
   const handleActionClick = (type) => {
-    if (!selectedUser) { setStatus({ msg: "Please select a user first.", ok: false }); return; }
+    if (!selectedUser) {
+      setStatus({ msg: "Please select a user first.", ok: false });
+      return;
+    }
+    // Punch In / Punch Out → need selfie first
     if (type === "Punch In" || type === "Punch Out") {
-      setCameraAction({ type });   // open camera modal
+      setCameraAction({ type });
     } else {
-      submitPunch(type, null);     // Start/End Break → no camera
+      // Start Break / End Break → no camera needed
+      submitPunch(type, null);
     }
   };
 
+  // ── Step 2: Camera captured → upload selfie to S3 via EC2 ─────
   const onCameraCapture = async (selfieDataUrl) => {
     const type = cameraAction.type;
-    setCameraAction(null);
-    await submitPunch(type, selfieDataUrl);
+    setCameraAction(null); // close camera modal
+
+    setUploadStage("uploading");
+    setLoading(true);
+    setStatus({ msg: "", ok: true });
+
+    try {
+      // STEP A — Upload selfie to S3 via Private EC2 backend
+      let s3Url = null;
+
+      try {
+        const uploadRes = await fetch(`${EC2_API}/upload-selfie`, {
+          method:  "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            imageBase64: selfieDataUrl,
+            user:        selectedUser,
+            actionType:  type,
+            timestamp:   new Date().toISOString(),
+          }),
+        });
+
+        if (!uploadRes.ok) throw new Error("EC2 upload failed");
+
+        const uploadData = await uploadRes.json();
+
+        if (uploadData.success && uploadData.s3Url) {
+          s3Url = uploadData.s3Url;
+          console.log("✅ Selfie uploaded to S3:", s3Url);
+        } else {
+          throw new Error(uploadData.error || "Upload returned no URL");
+        }
+
+      } catch (uploadErr) {
+        // If EC2/S3 is unreachable, fallback: save base64 locally
+        console.warn("⚠️ S3 upload failed, falling back to local storage:", uploadErr.message);
+        s3Url = selfieDataUrl; // base64 fallback
+      }
+
+      // STEP B — Save punch record with S3 URL to Render backend → Couchbase
+      setUploadStage("saving");
+
+      await submitPunch(type, s3Url);
+
+      setUploadStage("done");
+      setTimeout(() => setUploadStage(null), 1500); // hide modal after 1.5s
+
+    } catch (err) {
+      console.error("Punch failed:", err);
+      setUploadStage("error");
+      setStatus({ msg: "Something went wrong. Please try again.", ok: false });
+      setTimeout(() => setUploadStage(null), 2500);
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const submitPunch = async (type, selfie) => {
-    setLoading(true); setStatus({ msg: "", ok: true });
+  // ── Step 3: Save punch record to Render backend → Couchbase ───
+  const submitPunch = async (type, selfieUrlOrBase64) => {
     try {
-      const body = { type, user: selectedUser, manualDate, manualTime, selfie: selfie || null };
-      const res  = await fetch(`${API_BASE}/api/punch`, {
-        method: "POST",
+      const res = await fetch(`${API_BASE}/api/punch`, {
+        method:  "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify({
+          type,
+          user:       selectedUser,
+          manualDate,
+          manualTime,
+          selfie:     selfieUrlOrBase64 || null, // S3 URL (or base64 fallback)
+        }),
       });
+
       const data = await res.json();
       setStatus({ msg: data.message || "Recorded!", ok: true });
       await fetchEntries();
-    } catch { setStatus({ msg: "Error recording punch.", ok: false }); }
-    finally { setLoading(false); }
+
+    } catch {
+      setStatus({ msg: "Error saving punch record.", ok: false });
+      throw new Error("submitPunch failed");
+    }
   };
 
-  /* ── Filters ── */
+  // ── Filters ───────────────────────────────────────────────────
   const filtered = entries.filter(e =>
     (filterUser === "All Users" || e.user === filterUser) &&
     (filterType === "All Types" || e.type === filterType)
   );
 
-  /* ── Daily Summary ── */
+  // ── Daily Summary ─────────────────────────────────────────────
   const dailySummary = () => {
-    const map = {};
-    const sorted = [...entries].sort((a,b) => new Date(a.time) - new Date(b.time));
+    const map    = {};
+    const sorted = [...entries].sort((a, b) => new Date(a.time) - new Date(b.time));
     sorted.forEach(e => {
       const day  = new Date(e.time).toLocaleDateString();
       const user = e.user || "Unknown";
       const key  = `${day}__${user}`;
       if (!map[key]) map[key] = { day, user, pIn: null, pOut: null, breaks: 0, breakMs: 0, bStart: null };
-      if (e.type === "Punch In"  && !map[key].pIn) map[key].pIn  = new Date(e.time);
-      if (e.type === "Punch Out")                  map[key].pOut = new Date(e.time);
+      if (e.type === "Punch In"   && !map[key].pIn) map[key].pIn  = new Date(e.time);
+      if (e.type === "Punch Out")                   map[key].pOut = new Date(e.time);
       if (e.type === "Start Break") { map[key].breaks++; map[key].bStart = new Date(e.time); }
-      if (e.type === "End Break" && map[key].bStart) { map[key].breakMs += new Date(e.time) - map[key].bStart; map[key].bStart = null; }
+      if (e.type === "End Break" && map[key].bStart) {
+        map[key].breakMs += new Date(e.time) - map[key].bStart;
+        map[key].bStart = null;
+      }
     });
     return Object.values(map).map(r => ({
       ...r,
-      punchInStr:  r.pIn  ? r.pIn.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}) : "-",
-      punchOutStr: r.pOut ? r.pOut.toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}) : "Active…",
-      duration:    r.pIn && r.pOut ? ((r.pOut - r.pIn) / 3600000).toFixed(2) + " h" : (r.pIn ? "Active…" : "-"),
+      punchInStr:  r.pIn  ? r.pIn.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "-",
+      punchOutStr: r.pOut ? r.pOut.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "Active…",
+      duration:    r.pIn && r.pOut
+        ? ((r.pOut - r.pIn) / 3600000).toFixed(2) + " h"
+        : r.pIn ? "Active…" : "-",
       breakTime:   r.breakMs ? (r.breakMs / 60000).toFixed(0) + " min" : "-",
     }));
   };
 
-  const fmt = (iso) => iso ? new Date(iso).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"}) : null;
+  // helper: detect if selfie value is an S3 URL or base64
+  const isS3Url = (val) => val && val.startsWith("http");
 
+  // ─────────────────────────────────────────────────────────────
+  // RENDER
+  // ─────────────────────────────────────────────────────────────
   return (
     <div className="app-bg">
+
+      {/* Camera modal */}
       {cameraAction && (
         <CameraModal
           user={selectedUser}
@@ -316,18 +449,27 @@ export default function App() {
           onCancel={() => setCameraAction(null)}
         />
       )}
-      {zoomSelfie && <SelfiePop src={zoomSelfie} onClose={() => setZoomSelfie(null)} />}
+
+      {/* Uploading progress modal */}
+      {uploadStage && <UploadingModal stage={uploadStage} />}
+
+      {/* Selfie zoom modal */}
+      {zoomSelfie && (
+        <SelfiePop src={zoomSelfie} onClose={() => setZoomSelfie(null)} />
+      )}
 
       <div className="app-container">
 
-        {/* Header */}
+        {/* ── Header ── */}
         <header className="header">
           <div className="header-pill">⏰ Punch Clock</div>
           <h1 className="header-title">Welcome to Punch Clock</h1>
-          <p className="header-sub">Track your Punch In, Punch Out, Breaks, and Project Work</p>
+          <p className="header-sub">
+            Track your Punch In, Punch Out, Breaks, and Project Work
+          </p>
         </header>
 
-        {/* Stat Cards — no work hours here */}
+        {/* ── Stat Cards ── */}
         <div className="stat-grid">
           {statCards.map((s, i) => (
             <div className={`stat-card ${s.color}`} key={i}>
@@ -340,10 +482,11 @@ export default function App() {
           ))}
         </div>
 
-        {/* Record Punch */}
+        {/* ── Record Punch ── */}
         <div className="card">
           <div className="section-label">RECORD PUNCH</div>
 
+          {/* User dropdown */}
           <div className="select-wrap">
             <select
               className="user-select"
@@ -356,26 +499,44 @@ export default function App() {
             <span className="select-arrow">▾</span>
           </div>
 
+          {/* Manual time toggle */}
           <label className="manual-toggle">
-            <input type="checkbox" className="toggle-check" checked={manualMode}
-              onChange={e => setManualMode(e.target.checked)} />
+            <input
+              type="checkbox"
+              className="toggle-check"
+              checked={manualMode}
+              onChange={e => setManualMode(e.target.checked)}
+            />
             <span className="toggle-box" />
             <span className="toggle-text">
-              Enter time manually<span className="toggle-hint"> (if auto-detect fails)</span>
+              Enter time manually
+              <span className="toggle-hint"> (if auto-detect fails)</span>
             </span>
           </label>
 
           {manualMode && (
             <div className="manual-row">
-              <input className="mini-input" type="date" value={manualDate} onChange={e => setManualDate(e.target.value)} />
-              <input className="mini-input" type="time" value={manualTime} onChange={e => setManualTime(e.target.value)} />
+              <input
+                className="mini-input"
+                type="date"
+                value={manualDate}
+                onChange={e => setManualDate(e.target.value)}
+              />
+              <input
+                className="mini-input"
+                type="time"
+                value={manualTime}
+                onChange={e => setManualTime(e.target.value)}
+              />
             </div>
           )}
 
+          {/* Camera notice */}
           <div className="cam-notice">
-            <span>📷</span> Punch In &amp; Punch Out require a selfie verification
+            <span>📷</span> Punch In &amp; Punch Out require a selfie — photo uploads to S3
           </div>
 
+          {/* Action buttons */}
           <div className="action-grid">
             {PUNCH_ACTIONS.map(a => (
               <button
@@ -393,6 +554,7 @@ export default function App() {
             ))}
           </div>
 
+          {/* Status message */}
           {status.msg && (
             <div className={`status-pill ${status.ok ? "status-ok" : "status-err"}`}>
               {status.ok ? "✓" : "✕"} {status.msg}
@@ -400,32 +562,50 @@ export default function App() {
           )}
         </div>
 
-        {/* Tab Bar */}
+        {/* ── Tab Bar ── */}
         <div className="tab-bar">
-          <button className={`tab-btn ${activeTab==="history" ? "tab-active":""}`} onClick={() => setActiveTab("history")}>
+          <button
+            className={`tab-btn ${activeTab === "history" ? "tab-active" : ""}`}
+            onClick={() => setActiveTab("history")}
+          >
             📋 Shift History
           </button>
-          <button className={`tab-btn ${activeTab==="summary" ? "tab-active":""}`} onClick={() => setActiveTab("summary")}>
+          <button
+            className={`tab-btn ${activeTab === "summary" ? "tab-active" : ""}`}
+            onClick={() => setActiveTab("summary")}
+          >
             📊 Daily Summary
           </button>
         </div>
 
-        {/* Shift History */}
+        {/* ── Shift History ── */}
         {activeTab === "history" && (
           <div className="card">
             <div className="section-label">SHIFT HISTORY</div>
+
+            {/* Filters */}
             <div className="filter-row">
               <div className="filter-select-wrap">
-                <select className="filter-select" value={filterUser} onChange={e => setFilterUser(e.target.value)}>
+                <select
+                  className="filter-select"
+                  value={filterUser}
+                  onChange={e => setFilterUser(e.target.value)}
+                >
                   <option>All Users</option>
                   {USERS.map(u => <option key={u}>{u}</option>)}
                 </select>
                 <span className="select-arrow sm">▾</span>
               </div>
               <div className="filter-select-wrap">
-                <select className="filter-select" value={filterType} onChange={e => setFilterType(e.target.value)}>
+                <select
+                  className="filter-select"
+                  value={filterType}
+                  onChange={e => setFilterType(e.target.value)}
+                >
                   <option>All Types</option>
-                  {["Punch In","Punch Out","Start Break","End Break"].map(t => <option key={t}>{t}</option>)}
+                  {["Punch In", "Punch Out", "Start Break", "End Break"].map(t => (
+                    <option key={t}>{t}</option>
+                  ))}
                 </select>
                 <span className="select-arrow sm">▾</span>
               </div>
@@ -457,30 +637,59 @@ export default function App() {
                       return (
                         <tr key={i}>
                           <td className="td-num">{i + 1}</td>
+
+                          {/* User */}
                           <td>
                             <div className="td-user">
-                              <span className="user-avatar">{e.user ? e.user[0].toUpperCase() : "?"}</span>
+                              <span className="user-avatar">
+                                {e.user ? e.user[0].toUpperCase() : "?"}
+                              </span>
                               <span>{e.user || <span className="no-user">Unknown</span>}</span>
                             </div>
                           </td>
+
+                          {/* Type badge */}
                           <td>
-                            <span className={`badge badge-${e.type.replace(/\s/g,"-").toLowerCase()}`}>{e.type}</span>
+                            <span className={`badge badge-${e.type.replace(/\s/g, "-").toLowerCase()}`}>
+                              {e.type}
+                            </span>
                           </td>
+
+                          {/* Punch In time */}
                           <td className="td-mono time-green">
                             {wi.punchIn ? fmt(wi.punchIn) : <span className="td-dash">—</span>}
                           </td>
+
+                          {/* Punch Out time */}
                           <td className="td-mono time-red">
                             {wi.punchOut ? fmt(wi.punchOut) : <span className="td-dash">—</span>}
                           </td>
-                          <td className="td-mono bold-green">
-                            {wi.hours}
+
+                          {/* Work hours */}
+                          <td className="td-mono bold-green">{wi.hours}</td>
+
+                          {/* Date */}
+                          <td className="td-mono">
+                            {new Date(e.time).toLocaleDateString()}
                           </td>
-                          <td className="td-mono">{new Date(e.time).toLocaleDateString()}</td>
+
+                          {/* Selfie — shows thumbnail + S3/local badge */}
                           <td>
-                            {e.selfie
-                              ? <img src={e.selfie} alt="selfie" className="selfie-thumb"
-                                  onClick={() => setZoomSelfie(e.selfie)} />
-                              : <span className="td-dash">—</span>}
+                            {e.selfie ? (
+                              <div className="selfie-cell">
+                                <img
+                                  src={e.selfie}
+                                  alt="selfie"
+                                  className="selfie-thumb"
+                                  onClick={() => setZoomSelfie(e.selfie)}
+                                />
+                                <span className={`selfie-badge ${isS3Url(e.selfie) ? "badge-s3" : "badge-local"}`}>
+                                  {isS3Url(e.selfie) ? "S3" : "local"}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="td-dash">—</span>
+                            )}
                           </td>
                         </tr>
                       );
@@ -492,7 +701,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Daily Summary */}
+        {/* ── Daily Summary ── */}
         {activeTab === "summary" && (
           <div className="card">
             <div className="section-label">DAILY SUMMARY</div>
@@ -506,9 +715,13 @@ export default function App() {
                 <table className="shift-table">
                   <thead>
                     <tr>
-                      <th>#</th><th>USER</th><th>DATE</th>
-                      <th>PUNCH IN</th><th>PUNCH OUT</th>
-                      <th>WORK HRS</th><th>BREAK</th>
+                      <th>#</th>
+                      <th>USER</th>
+                      <th>DATE</th>
+                      <th>PUNCH IN</th>
+                      <th>PUNCH OUT</th>
+                      <th>WORK HRS</th>
+                      <th>BREAK</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -517,7 +730,9 @@ export default function App() {
                         <td className="td-num">{i + 1}</td>
                         <td>
                           <div className="td-user">
-                            <span className="user-avatar">{r.user ? r.user[0].toUpperCase() : "?"}</span>
+                            <span className="user-avatar">
+                              {r.user ? r.user[0].toUpperCase() : "?"}
+                            </span>
                             <span>{r.user || "Unknown"}</span>
                           </div>
                         </td>
