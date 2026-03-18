@@ -9,7 +9,7 @@ app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "client/build")));
 
 // ── EC2 backend IP — Render calls EC2 server-to-server (no HTTPS restriction) ──
-const EC2_HOST = "13.201.45.178";
+const EC2_HOST = "10.0.36.162";
 const EC2_PORT = 5000;
 
 const DATA_FILE = path.join(__dirname, "entries.json");
