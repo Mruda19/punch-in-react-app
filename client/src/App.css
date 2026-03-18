@@ -312,7 +312,8 @@ body {
 .shift-table tbody tr:hover { background: #f8fbff; }
 
 .td-num   { color: var(--text-faint); font-weight: 600; width: 36px; }
-.td-user  { font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; }
+.td-user  { font-weight: 600; display: flex; align-items: center; gap: 8px; white-space: nowrap; min-width: 120px; }
+.no-user  { color: #94a3b8; font-style: italic; font-weight: 400; font-size: .8rem; }
 .td-mono  { font-family: 'JetBrains Mono', monospace; font-size: .8rem; color: var(--text-muted); }
 .bold-green { color: var(--green); font-weight: 700; }
 

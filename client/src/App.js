@@ -231,9 +231,11 @@ export default function App() {
                     {filtered.map((e, i) => (
                       <tr key={i}>
                         <td className="td-num">{i + 1}</td>
-                        <td className="td-user">
-                          <span className="user-avatar">{(e.user||"?")[0]}</span>
-                          {e.user || "-"}
+                        <td>
+                          <div className="td-user">
+                            <span className="user-avatar">{e.user ? e.user[0].toUpperCase() : "?"}</span>
+                            <span>{e.user || <span className="no-user">No user recorded</span>}</span>
+                          </div>
                         </td>
                         <td>
                           <span className={`badge badge-${e.type.replace(/\s/g,"-").toLowerCase()}`}>{e.type}</span>
@@ -269,9 +271,11 @@ export default function App() {
                     {dailySummary().map((r, i) => (
                       <tr key={i}>
                         <td className="td-num">{i + 1}</td>
-                        <td className="td-user">
-                          <span className="user-avatar">{(r.user||"?")[0]}</span>
-                          {r.user}
+                        <td>
+                          <div className="td-user">
+                            <span className="user-avatar">{r.user ? r.user[0].toUpperCase() : "?"}</span>
+                            <span>{r.user || "Unknown"}</span>
+                          </div>
                         </td>
                         <td className="td-mono">{r.day}</td>
                         <td className="td-mono bold-green">{r.duration}</td>
