@@ -349,9 +349,16 @@ export default function App() {
         }
 
       } catch (uploadErr) {
-        // If EC2/S3 is unreachable, fallback: save base64 locally
-        console.warn("⚠️ S3 upload failed, falling back to local storage:", uploadErr.message);
-        s3Url = selfieDataUrl; // base64 fallback
+        // S3 upload failed — show clear error, do NOT silently use base64
+        console.error("❌ S3 upload failed:", uploadErr.message);
+        setUploadStage("error");
+        setStatus({
+          msg: `S3 upload failed: ${uploadErr.message}. Check EC2 is running and EC2_API IP is correct.`,
+          ok: false,
+        });
+        setTimeout(() => setUploadStage(null), 3000);
+        setLoading(false);
+        return; // stop — do not save punch without S3 URL
       }
 
       // STEP B — Save punch record with S3 URL to Render backend → Couchbase
