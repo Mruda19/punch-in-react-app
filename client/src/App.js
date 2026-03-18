@@ -9,7 +9,7 @@ const API_BASE    = "";                              // Render backend (existing
 // React runs on Render (public internet) so it CANNOT reach
 // the private EC2 IP (10.0.x.x) directly.
 // Use your Bastion's public IP here, then redeploy to Render.
-const EC2_API = "http://13.201.45.178:5000"; // 👈 only change this one line
+// EC2 upload is now handled server-side by Render backend (no HTTPS/mixed-content issue)
 
 const USERS = [
   "Ajit Jadhav",
@@ -312,75 +312,35 @@ export default function App() {
     }
   };
 
-  // ── Step 2: Camera captured → upload selfie to S3 via EC2 ─────
+  // ── Step 2: Camera captured → send base64 to Render → EC2 → S3 ─
+  // NOTE: We do NOT call EC2 directly from browser (Mixed Content block)
+  // Render backend receives base64, forwards to EC2, gets S3 URL, saves to DB
   const onCameraCapture = async (selfieDataUrl) => {
     const type = cameraAction.type;
-    setCameraAction(null); // close camera modal
+    setCameraAction(null);
 
     setUploadStage("uploading");
     setLoading(true);
     setStatus({ msg: "", ok: true });
 
     try {
-      // STEP A — Upload selfie to S3 via Private EC2 backend
-      let s3Url = null;
-
-      try {
-        const uploadRes = await fetch(`${EC2_API}/upload-selfie`, {
-          method:  "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            imageBase64: selfieDataUrl,
-            user:        selectedUser,
-            actionType:  type,
-            timestamp:   new Date().toISOString(),
-          }),
-        });
-
-        if (!uploadRes.ok) throw new Error("EC2 upload failed");
-
-        const uploadData = await uploadRes.json();
-
-        if (uploadData.success && uploadData.s3Url) {
-          s3Url = uploadData.s3Url;
-          console.log("✅ Selfie uploaded to S3:", s3Url);
-        } else {
-          throw new Error(uploadData.error || "Upload returned no URL");
-        }
-
-      } catch (uploadErr) {
-        // S3 upload failed — show clear error, do NOT silently use base64
-        console.error("❌ S3 upload failed:", uploadErr.message);
-        setUploadStage("error");
-        setStatus({
-          msg: `S3 upload failed: ${uploadErr.message}. Check EC2 is running and EC2_API IP is correct.`,
-          ok: false,
-        });
-        setTimeout(() => setUploadStage(null), 3000);
-        setLoading(false);
-        return; // stop — do not save punch without S3 URL
-      }
-
-      // STEP B — Save punch record with S3 URL to Render backend → Couchbase
       setUploadStage("saving");
-
-      await submitPunch(type, s3Url);
-
+      // Pass base64 to submitPunch → Render backend handles EC2 upload internally
+      await submitPunch(type, selfieDataUrl);
       setUploadStage("done");
-      setTimeout(() => setUploadStage(null), 1500); // hide modal after 1.5s
-
+      setTimeout(() => setUploadStage(null), 1500);
     } catch (err) {
       console.error("Punch failed:", err);
       setUploadStage("error");
-      setStatus({ msg: "Something went wrong. Please try again.", ok: false });
-      setTimeout(() => setUploadStage(null), 2500);
+      setStatus({ msg: err.message || "Something went wrong. Please try again.", ok: false });
+      setTimeout(() => setUploadStage(null), 3000);
     } finally {
       setLoading(false);
     }
   };
 
-  // ── Step 3: Save punch record to Render backend → Couchbase ───
-  const submitPunch = async (type, selfieUrlOrBase64) => {
+  // ── Step 3: Save punch record → Render backend forwards selfie to EC2 → S3 ──
+  const submitPunch = async (type, selfieBase64OrNull) => {
     try {
       const res = await fetch(`${API_BASE}/api/punch`, {
         method:  "POST",
@@ -390,9 +350,15 @@ export default function App() {
           user:       selectedUser,
           manualDate,
           manualTime,
-          selfie:     selfieUrlOrBase64 || null, // S3 URL (or base64 fallback)
+          selfie:     selfieBase64OrNull || null,
         }),
       });
+
+      // Handle error responses from Render (e.g. EC2 unreachable)
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.message || `Server error ${res.status}`);
+      }
 
       const data = await res.json();
       setStatus({ msg: data.message || "Recorded!", ok: true });
