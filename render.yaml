@@ -2,8 +2,12 @@ services:
   - type: web
     name: punch-in-react-app
     env: node
+    region: oregon
+    plan: free
     buildCommand: npm install && cd client && npm install && npm run build
     startCommand: node server.js
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PORT
+        value: 10000
