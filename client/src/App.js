@@ -9,7 +9,7 @@ const API_BASE    = "";                              // Render backend (existing
 // React runs on Render (public internet) so it CANNOT reach
 // the private EC2 IP (10.0.x.x) directly.
 // Use your Bastion's public IP here, then redeploy to Render.
-const EC2_API = "http://<13.201.45.178>:5000"; // 👈 only change this one line
+const EC2_API = "http://13.201.45.178:5000"; // 👈 only change this one line
 
 const USERS = [
   "Ajit Jadhav",
