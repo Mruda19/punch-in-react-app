@@ -11,13 +11,13 @@ app.use(express.static(path.join(__dirname, "client/build")));
 
 // ── Config from Render environment variables ─────────────────────
 // Render Dashboard → Environment → Add these:
-//   EC2_PRIVATE_IP  = 13.201.45.178      (Bastion public IP)
+//   EC2_PRIVATE_IP  = 13.127.203.140      (Bastion public IP)
 //   EC2_PORT        = 5000
 //   AWS_REGION      = ap-south-1
 //   SNS_TOPIC_ARN   = arn:aws:sns:ap-south-1:XXXXXXXXXXXX:punch-notifications
 //   AWS_ACCESS_KEY  = your IAM access key
 //   AWS_SECRET_KEY  = your IAM secret key
-const EC2_HOST      = process.env.EC2_PRIVATE_IP || "13.201.45.178";
+const EC2_HOST      = process.env.EC2_PRIVATE_IP || "13.127.203.140";
 const EC2_PORT      = parseInt(process.env.EC2_PORT || "5000");
 const AWS_REGION    = process.env.AWS_REGION     || "ap-south-1";
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN  || "";
@@ -278,4 +278,4 @@ app.listen(PORT, "0.0.0.0", () => {
   console.log(`server started on port ${PORT}`);
   console.log(`EC2 backend  : ${EC2_HOST}:${EC2_PORT}`);
   console.log(`SNS topic    : ${SNS_TOPIC_ARN || "NOT CONFIGURED"}`);
-});
+}); 
