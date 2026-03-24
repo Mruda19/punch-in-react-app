@@ -1,24 +1,23 @@
+require("dotenv").config();
+
 const express  = require("express");
 const path     = require("path");
 const fs       = require("fs");
-const http     = require("http");
 const https    = require("https");
+const crypto   = require("crypto");
+const { URL }  = require("url");
 
 const app = express();
-
 app.use(express.json({ limit: "10mb" }));
 app.use(express.static(path.join(__dirname, "client/build")));
 
-// ── Config from Render environment variables ─────────────────────
-// Render Dashboard → Environment → Add these:
-//   EC2_PRIVATE_IP  = 13.127.203.140      (Bastion public IP)
-//   EC2_PORT        = 5000
-//   AWS_REGION      = ap-south-1
-//   SNS_TOPIC_ARN   = arn:aws:sns:ap-south-1:XXXXXXXXXXXX:punch-notifications
-//   AWS_ACCESS_KEY  = your IAM access key
-//   AWS_SECRET_KEY  = your IAM secret key
-const EC2_HOST      = process.env.EC2_PRIVATE_IP || "13.127.203.140";
-const EC2_PORT      = parseInt(process.env.EC2_PORT || "5000");
+// ── Config — set these in Render Dashboard → Environment ─────────
+// LAMBDA_API_URL = https://xxxxxx.execute-api.ap-south-1.amazonaws.com/prod/upload-selfie
+// SNS_TOPIC_ARN  = arn:aws:sns:ap-south-1:XXXXXXXXXXXX:punch-notifications
+// AWS_REGION     = ap-south-1
+// AWS_ACCESS_KEY = your IAM access key
+// AWS_SECRET_KEY = your IAM secret key
+const LAMBDA_URL    = process.env.LAMBDA_API_URL || "";
 const AWS_REGION    = process.env.AWS_REGION     || "ap-south-1";
 const SNS_TOPIC_ARN = process.env.SNS_TOPIC_ARN  || "";
 const AWS_ACCESS    = process.env.AWS_ACCESS_KEY  || "";
@@ -31,23 +30,59 @@ function loadEntries() {
   try { return JSON.parse(fs.readFileSync(DATA_FILE, "utf8")); }
   catch { return []; }
 }
-
 function saveEntries(entries) {
   fs.writeFileSync(DATA_FILE, JSON.stringify(entries, null, 2));
 }
 
-// ── AWS Signature v4 helper (no SDK needed on Render) ────────────
-const crypto = require("crypto");
+// ── Upload selfie via API Gateway → Lambda → S3 ──────────────────
+function uploadViaLambda(payload) {
+  return new Promise((resolve, reject) => {
+    if (!LAMBDA_URL) return reject(new Error("LAMBDA_API_URL not configured in environment variables"));
 
+    const body       = JSON.stringify(payload);
+    const parsedUrl  = new URL(LAMBDA_URL);
+
+    const options = {
+      hostname: parsedUrl.hostname,
+      path:     parsedUrl.pathname + parsedUrl.search,
+      method:   "POST",
+      headers:  {
+        "Content-Type":   "application/json",
+        "Content-Length": Buffer.byteLength(body),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      let data = "";
+      res.on("data", chunk => { data += chunk; });
+      res.on("end", () => {
+        try {
+          const parsed = JSON.parse(data);
+          if (parsed.success && parsed.s3Url) resolve(parsed.s3Url);
+          else reject(new Error(parsed.error || "Lambda returned no S3 URL"));
+        } catch {
+          reject(new Error("Invalid JSON response from Lambda"));
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.setTimeout(20000, () => {
+      req.destroy();
+      reject(new Error("Lambda request timed out after 20s"));
+    });
+
+    req.write(body);
+    req.end();
+  });
+}
+
+// ── AWS Signature v4 helper (for SNS) ────────────────────────────
 function sign(key, msg) {
   return crypto.createHmac("sha256", key).update(msg).digest();
 }
 function getSignatureKey(secret, date, region, service) {
-  const kDate    = sign("AWS4" + secret, date);
-  const kRegion  = sign(kDate, region);
-  const kService = sign(kRegion, service);
-  const kSigning = sign(kService, "aws4_request");
-  return kSigning;
+  return sign(sign(sign(sign("AWS4" + secret, date), region), service), "aws4_request");
 }
 
 // ── Send SNS notification ─────────────────────────────────────────
@@ -57,11 +92,10 @@ async function sendSNSNotification(user, type, timestamp, s3Url) {
     return;
   }
 
-  const time      = new Date(timestamp);
-  const timeStr   = time.toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
-  const icon      = type === "Punch In"    ? "🟢" :
-                    type === "Punch Out"   ? "🔴" :
-                    type === "Start Break" ? "🟡" : "🔵";
+  const timeStr = new Date(timestamp).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" });
+  const icon    = type === "Punch In"    ? "🟢" :
+                  type === "Punch Out"   ? "🔴" :
+                  type === "Start Break" ? "🟡" : "🔵";
 
   const message = [
     `${icon} PUNCH CLOCK ALERT`,
@@ -74,125 +108,53 @@ async function sendSNSNotification(user, type, timestamp, s3Url) {
     `Punch Clock App`,
   ].join("\n");
 
-  const subject = `${icon} ${user} — ${type} at ${timeStr}`;
-
-  // Build SNS Publish request
-  const endpoint  = `https://sns.${AWS_REGION}.amazonaws.com/`;
+  const subject   = `${icon} ${user} — ${type} at ${timeStr}`;
   const now       = new Date();
   const amzDate   = now.toISOString().replace(/[:-]|\.\d{3}/g, "").slice(0, 15) + "Z";
   const dateStamp = amzDate.slice(0, 8);
+  const bodyStr   = new URLSearchParams({
+    Action: "Publish", TopicArn: SNS_TOPIC_ARN,
+    Message: message, Subject: subject, Version: "2010-03-31",
+  }).toString();
 
-  const params = new URLSearchParams({
-    Action:   "Publish",
-    TopicArn: SNS_TOPIC_ARN,
-    Message:  message,
-    Subject:  subject,
-    Version:  "2010-03-31",
-  });
-  const bodyStr = params.toString();
-
-  // Canonical request
-  const payloadHash     = crypto.createHash("sha256").update(bodyStr).digest("hex");
+  const payloadHash      = crypto.createHash("sha256").update(bodyStr).digest("hex");
   const canonicalHeaders = `content-type:application/x-www-form-urlencoded\nhost:sns.${AWS_REGION}.amazonaws.com\nx-amz-date:${amzDate}\n`;
   const signedHeaders    = "content-type;host;x-amz-date";
-  const canonicalRequest = [
-    "POST", "/", "",
-    canonicalHeaders,
-    signedHeaders,
-    payloadHash,
-  ].join("\n");
-
-  // String to sign
-  const credScope   = `${dateStamp}/${AWS_REGION}/sns/aws4_request`;
-  const strToSign   = `AWS4-HMAC-SHA256\n${amzDate}\n${credScope}\n` +
+  const canonicalRequest = ["POST", "/", "", canonicalHeaders, signedHeaders, payloadHash].join("\n");
+  const credScope        = `${dateStamp}/${AWS_REGION}/sns/aws4_request`;
+  const strToSign        = `AWS4-HMAC-SHA256\n${amzDate}\n${credScope}\n` +
     crypto.createHash("sha256").update(canonicalRequest).digest("hex");
-
-  // Signature
-  const signingKey  = getSignatureKey(AWS_SECRET, dateStamp, AWS_REGION, "sns");
-  const signature   = crypto.createHmac("sha256", signingKey).update(strToSign).digest("hex");
-  const authHeader  = `AWS4-HMAC-SHA256 Credential=${AWS_ACCESS}/${credScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
+  const signature        = crypto.createHmac("sha256",
+    getSignatureKey(AWS_SECRET, dateStamp, AWS_REGION, "sns"))
+    .update(strToSign).digest("hex");
+  const authHeader = `AWS4-HMAC-SHA256 Credential=${AWS_ACCESS}/${credScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 
   return new Promise((resolve, reject) => {
-    const reqOptions = {
+    const req = https.request({
       hostname: `sns.${AWS_REGION}.amazonaws.com`,
-      path:     "/",
-      method:   "POST",
-      headers:  {
+      path: "/", method: "POST",
+      headers: {
         "Content-Type":   "application/x-www-form-urlencoded",
         "Content-Length": Buffer.byteLength(bodyStr),
         "X-Amz-Date":     amzDate,
         "Authorization":  authHeader,
       },
-    };
-
-    const req = https.request(reqOptions, (res) => {
+    }, (res) => {
       let data = "";
       res.on("data", c => data += c);
       res.on("end", () => {
-        if (res.statusCode === 200) {
-          console.log("✅ SNS notification sent:", subject);
-          resolve();
-        } else {
-          console.error("❌ SNS error response:", res.statusCode, data);
-          reject(new Error(`SNS HTTP ${res.statusCode}`));
-        }
+        if (res.statusCode === 200) { console.log("✅ SNS sent:", subject); resolve(); }
+        else { console.error("❌ SNS error:", res.statusCode, data); reject(new Error(`SNS HTTP ${res.statusCode}`)); }
       });
     });
-
-    req.on("error", (e) => {
-      console.error("❌ SNS request error:", e.message);
-      reject(e);
-    });
-
+    req.on("error", reject);
     req.write(bodyStr);
     req.end();
   });
 }
 
-// ── Helper: forward selfie to EC2 → S3 ──────────────────────────
-function uploadToEC2(payload) {
-  return new Promise((resolve, reject) => {
-    const body    = JSON.stringify(payload);
-    const options = {
-      hostname: EC2_HOST,
-      port:     EC2_PORT,
-      path:     "/upload-selfie",
-      method:   "POST",
-      headers:  {
-        "Content-Type":   "application/json",
-        "Content-Length": Buffer.byteLength(body),
-      },
-    };
-
-    const req = http.request(options, (res) => {
-      let data = "";
-      res.on("data", chunk => { data += chunk; });
-      res.on("end", () => {
-        try {
-          const parsed = JSON.parse(data);
-          if (parsed.success && parsed.s3Url) resolve(parsed.s3Url);
-          else reject(new Error(parsed.error || "EC2 upload returned no URL"));
-        } catch {
-          reject(new Error("Invalid JSON response from EC2"));
-        }
-      });
-    });
-
-    req.on("error", (err) => reject(err));
-    req.setTimeout(20000, () => {
-      req.destroy();
-      reject(new Error("EC2 request timed out after 20s"));
-    });
-
-    req.write(body);
-    req.end();
-  });
-}
-
 // ── GET all entries ──────────────────────────────────────────────
-app.get("/api/entries", (req, res) => {
-  res.json(loadEntries());
-});
+app.get("/api/entries", (req, res) => res.json(loadEntries()));
 
 // ── POST punch ───────────────────────────────────────────────────
 app.post("/api/punch", async (req, res) => {
@@ -205,38 +167,37 @@ app.post("/api/punch", async (req, res) => {
     ? new Date(`${manualDate}T${manualTime}`).toISOString()
     : new Date().toISOString();
 
-  // Step 1 — Upload selfie to S3 via EC2
+  // Step 1 — Upload selfie via Lambda → S3
   let finalSelfieUrl = null;
   if (selfie) {
     try {
-      console.log(`⬆️  Forwarding selfie to EC2 for ${user} - ${type}`);
-      finalSelfieUrl = await uploadToEC2({ imageBase64: selfie, user, actionType: type, timestamp });
-      console.log("✅ S3 URL received:", finalSelfieUrl);
+      console.log(`⬆️  Sending selfie to Lambda for ${user} - ${type}`);
+      finalSelfieUrl = await uploadViaLambda({
+        imageBase64: selfie,
+        user,
+        actionType: type,
+        timestamp,
+      });
+      console.log("✅ S3 URL:", finalSelfieUrl);
     } catch (err) {
-      console.error("❌ EC2 upload failed:", err.message);
+      console.error("❌ Lambda upload failed:", err.message);
       return res.status(502).json({
-        message: `Selfie upload to S3 failed: ${err.message}`,
-        hint:    "Check EC2 is running and Security Group port 5000 is open",
+        message: `Selfie upload failed: ${err.message}`,
+        hint: "Check LAMBDA_API_URL is set correctly in Render environment variables",
       });
     }
   }
 
   // Step 2 — Save punch entry
-  const entry = {
-    type,
-    user:   user.trim(),
-    time:   timestamp,
-    selfie: finalSelfieUrl,
-  };
-
+  const entry = { type, user: user.trim(), time: timestamp, selfie: finalSelfieUrl };
   const entries = loadEntries();
   entries.push(entry);
   saveEntries(entries);
   console.log(`✅ Punch saved: ${type} for ${user} | selfie: ${finalSelfieUrl || "none"}`);
 
-  // Step 3 — Send SNS notification (non-blocking — don't fail punch if SNS fails)
+  // Step 3 — SNS notification (non-blocking)
   sendSNSNotification(user, type, timestamp, finalSelfieUrl)
-    .catch(err => console.error("⚠️  SNS notification failed (punch still saved):", err.message));
+    .catch(err => console.error("⚠️  SNS failed:", err.message));
 
   res.json({ message: `${type} recorded successfully for ${user}.`, entry });
 });
@@ -247,25 +208,16 @@ app.delete("/api/entries", (req, res) => {
   res.json({ message: "All entries cleared." });
 });
 
-// ── EC2 health check ─────────────────────────────────────────────
-app.get("/api/ec2-health", (req, res) => {
-  const options = {
-    hostname: EC2_HOST,
-    port:     EC2_PORT,
-    path:     "/health",
-    method:   "GET",
-  };
-  const probe = http.request(options, (r) => {
-    let d = "";
-    r.on("data", c => d += c);
-    r.on("end", () => {
-      try { res.json({ ec2: "reachable", host: EC2_HOST, response: JSON.parse(d) }); }
-      catch { res.json({ ec2: "reachable but bad JSON", host: EC2_HOST }); }
-    });
+// ── Lambda health check ──────────────────────────────────────────
+app.get("/api/lambda-health", (req, res) => {
+  if (!LAMBDA_URL) return res.json({ status: "not configured", hint: "Set LAMBDA_API_URL in Render environment" });
+  const parsedUrl = new URL(LAMBDA_URL);
+  res.json({
+    status:   "configured",
+    endpoint: parsedUrl.hostname,
+    path:     parsedUrl.pathname,
+    sns:      SNS_TOPIC_ARN ? "configured" : "not configured",
   });
-  probe.on("error", (e) => res.json({ ec2: "unreachable", host: EC2_HOST, error: e.message }));
-  probe.setTimeout(5000, () => { probe.destroy(); res.json({ ec2: "timeout", host: EC2_HOST }); });
-  probe.end();
 });
 
 // ── Fallback to React ────────────────────────────────────────────
@@ -276,6 +228,6 @@ app.get("*", (req, res) => {
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`server started on port ${PORT}`);
-  console.log(`EC2 backend  : ${EC2_HOST}:${EC2_PORT}`);
-  console.log(`SNS topic    : ${SNS_TOPIC_ARN || "NOT CONFIGURED"}`);
-}); 
+  console.log(`Lambda URL : ${LAMBDA_URL || "NOT CONFIGURED"}`);
+  console.log(`SNS topic  : ${SNS_TOPIC_ARN || "NOT CONFIGURED"}`);
+});
